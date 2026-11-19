@@ -1,0 +1,657 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#09040c">
+<title>For Shalita 💗</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; }
+body {
+  background: #09040c;
+  color: #fff;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+#intro {
+  position: fixed; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  gap: 18px; text-align: center; padding: 24px;
+  background: radial-gradient(ellipse at center, #291126 0%, #100814 48%, #07040a 100%);
+  transition: opacity 1.2s ease;
+}
+.intro-heart {
+  font-size: clamp(42px, 10vw, 72px);
+  filter: drop-shadow(0 0 18px #ff63ad);
+  animation: pulse 1.4s infinite;
+}
+#intro h1 {
+  color: #ffadd2; font-size: clamp(30px, 7vw, 56px);
+  text-shadow: 0 0 22px #ff4c9b; letter-spacing: 1px;
+}
+#intro p { color: #f4c8df; font-size: clamp(14px, 3.5vw, 18px); }
+#countdown {
+  min-height: 105px; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: clamp(76px, 17vw, 112px); font-weight: 800;
+  text-shadow: 0 0 12px #ff6db5, 0 0 38px #ec3f9c;
+}
+#hint { color: #c99bb7; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+
+@keyframes pulse {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.13); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-heart { animation: none; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+
+<section id="intro" aria-label="Pembuka">
+  <div class="intro-heart">💗</div>
+  <h1>Haii, Shalita</h1>
+  <p>Aku punya sesuatu buat kamu...</p>
+  <div id="countdown" aria-live="polite"></div>
+</section>
+
+<script>
+(() => {
+  const canvas = document.getElementById("scene");
+  const ctx = canvas.getContext("2d");
+  const intro = document.getElementById("intro");
+  const countdown = document.getElementById("countdown");
+
+  let W = 0, H = 0, dpr = 1;
+  let drops = [], particles = [];
+  let sceneStartedAt = 0;
+  let activeScene = "";
+  let animationFrame = 0;
+  let floatingHearts = [];
+  let heartSceneStartedAt = 0;
+  let outlineSprite = null;
+
+  const pointer = { x: 0, y: 0, active: false };
+
+  const chars = "01LOVEILY♡♥✦";
+  const colors = [
+    "#ff4f9a",
+    "#ff79b7",
+    "#e879f9",
+    "#ffc0df",
+    "#fff0f7"
+  ];
+
+  const outlineImage = new Image();
+  outlineImage.addEventListener("load", () => {
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = outlineImage.naturalWidth;
+    sourceCanvas.height = outlineImage.naturalHeight;
+    const sourceCtx = sourceCanvas.getContext("2d");
+    if (!sourceCtx) {
+      console.error("Could not prepare coy.png for the heart outline.");
+      return;
+    }
+
+    sourceCtx.drawImage(outlineImage, 0, 0);
+    const imageData = sourceCtx.getImageData(
+      0, 0, sourceCanvas.width, sourceCanvas.height
+    );
+    const pixels = imageData.data;
+    let minX = sourceCanvas.width;
+    let minY = sourceCanvas.height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < sourceCanvas.height; y++) {
+      for (let x = 0; x < sourceCanvas.width; x++) {
+        const index = (y * sourceCanvas.width + x) * 4;
+        const intensity = pixels[index] + pixels[index + 1] + pixels[index + 2];
+        if (intensity < 70) {
+          pixels[index + 3] = 0;
+          continue;
+        }
+        if (intensity < 150) {
+          pixels[index + 3] *= (intensity - 70) / 80;
+        }
+        if (intensity > 110) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) {
+      console.error("coy.png has no visible heart to use in the outline.");
+      return;
+    }
+
+    sourceCtx.putImageData(imageData, 0, 0);
+    const padding = Math.round(Math.min(
+      maxX - minX + 1,
+      maxY - minY + 1
+    ) * 0.06);
+    const left = Math.max(0, minX - padding);
+    const top = Math.max(0, minY - padding);
+    const width = Math.min(sourceCanvas.width - left, maxX - minX + 1 + padding * 2);
+    const height = Math.min(sourceCanvas.height - top, maxY - minY + 1 + padding * 2);
+
+    outlineSprite = document.createElement("canvas");
+    outlineSprite.width = width;
+    outlineSprite.height = height;
+    const spriteCtx = outlineSprite.getContext("2d");
+    if (!spriteCtx) {
+      outlineSprite = null;
+      console.error("Could not create the coy.png heart sprite.");
+      return;
+    }
+    spriteCtx.drawImage(
+      sourceCanvas,
+      left, top, width, height,
+      0, 0, width, height
+    );
+  });
+  outlineImage.addEventListener("error", () => {
+    console.error("Could not load coy.png for the heart outline.");
+  });
+  outlineImage.src = "coy.png";
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const columns = Math.ceil(W / 7);
+    drops = Array.from(
+      { length: columns * 3 },
+      () => Math.random() * -H
+    );
+
+    if (activeScene === "HEART") {
+      setParticles(makeHeart());
+    }
+  }
+
+  window.addEventListener("resize", resize);
+
+  window.addEventListener("pointermove", (event) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    pointer.active = true;
+  });
+
+  window.addEventListener("pointerleave", () => {
+    pointer.active = false;
+  });
+
+  resize();
+
+  // DIGITAL RAIN
+  function drawRain() {
+    ctx.fillStyle = "rgba(9, 4, 12, 0.10)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.font = "14px monospace";
+
+    for (let i = 0; i < drops.length; i++) {
+      const ch = chars[
+        Math.floor(Math.random() * chars.length)
+      ];
+
+      const x = (i * 7) + (Math.random() * 6);
+
+      ctx.fillStyle = colors[
+        Math.floor(Math.random() * colors.length)
+      ];
+
+      ctx.globalAlpha = 0.5 + Math.random() * 0.6;
+      ctx.fillText(ch, x, drops[i]);
+
+      drops[i] += 4.2 + Math.random() * 6.1;
+
+      if (drops[i] > H + 50) {
+        drops[i] = -Math.random() * 260;
+      }
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  // MEMBUAT TULISAN DARI PARTIKEL
+  function makeTextPoints(text) {
+    const off = document.createElement("canvas");
+    const o = off.getContext("2d");
+
+    off.width = Math.ceil(W);
+    off.height = Math.ceil(H);
+
+    const size = Math.min(W * 0.17, H * 0.22, 104);
+
+    o.font = `800 ${size}px Arial`;
+    o.textAlign = "center";
+    o.textBaseline = "middle";
+    o.fillStyle = "#fff";
+
+    o.fillText(text, W / 2, H / 2);
+
+    const data = o.getImageData(
+      0, 0, off.width, off.height
+    ).data;
+
+    const points = [];
+    const step = Math.max(
+      4,
+      Math.round(Math.min(W, H) / 150)
+    );
+
+    for (let y = 0; y < off.height; y += step) {
+      for (let x = 0; x < off.width; x += step) {
+        if (data[(y * off.width + x) * 4 + 3] > 100) {
+          points.push({
+            x,
+            y,
+            color: "#ffeaf5"
+          });
+        }
+      }
+    }
+
+    return points;
+  }
+
+  // MEMBUAT BENTUK HEART DARI PARTIKEL
+  function makeHeart() {
+    const points = [];
+    const scale = Math.min(W, H) / 38;
+
+    // Garis utama hati
+    const step = 0.04;
+
+    for (let t = 0; t < Math.PI * 2; t += step) {
+      const x = 16 * Math.pow(Math.sin(t), 3);
+
+      const y =
+        13 * Math.cos(t)
+        - 5 * Math.cos(2*t)
+        - 2 * Math.cos(3*t)
+        - Math.cos(4*t);
+
+      // Lapisan kontur neon
+      for (let layer = 0; layer < 2; layer++) {
+        const spread =
+          layer === 0 ? 3 : 12;
+
+        const jitter = (Math.random() - 0.5) * spread;
+        const offsetX = (Math.random() - 0.5) * spread;
+
+        points.push({
+          x: W / 2 + x * scale + offsetX,
+          y: H / 2 - y * scale + jitter,
+
+          color: Math.random() < 0.7 ? "#ff4f9a" : "#ff79b7",
+
+          glyph: Math.random() < 0.75 ? "♥" : "♡",
+          size: 1.3 + Math.random() * 1.5,
+          phase: Math.random() * Math.PI * 2,
+          isOutline: true
+        });
+      }
+    }
+
+    // Percikan cahaya di sekitar hati
+    for (let k = 0; k < 160; k++) {
+      const t = Math.random() * Math.PI * 2;
+
+      const x = 16 * Math.pow(Math.sin(t), 3);
+
+      const y =
+        13 * Math.cos(t)
+        - 5 * Math.cos(2*t)
+        - 2 * Math.cos(3*t)
+        - Math.cos(4*t);
+
+      const spread = (Math.random() - 0.5) * 12;
+
+      points.push({
+        x: W / 2 + x * scale + spread,
+        y: H / 2 - y * scale + spread,
+
+        color: colors[Math.floor(Math.random() * 3)],
+
+        glyph: Math.random() < 0.7 ? "·" : "✧",
+        size: 0.7 + Math.random() * 1.7,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+
+    return points;
+  }
+
+  // MENGATUR POSISI PARTIKEL
+  function setParticles(points) {
+    particles = points.map(point => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+
+      tx: point.x,
+      ty: point.y,
+      color: point.color,
+
+      size: point.size || (1 + Math.random() * 1.6),
+      phase: point.phase ?? (Math.random() * Math.PI * 2),
+      motion: 1.2 + Math.random() * 2.8,
+
+      glyph: point.glyph || (
+        Math.random() < 0.5 ? "♥" : "♡"
+      ),
+      isOutline: point.isOutline
+    }));
+
+    if (activeScene === "HEART") {
+      const outlinePoints = points.filter(point => point.isOutline);
+      floatingHearts = Array.from(
+        { length: 8 },
+        () => {
+          const target = outlinePoints[
+            Math.floor(Math.random() * outlinePoints.length)
+          ];
+          return {
+            targetX: target.x,
+            targetY: target.y,
+            progress: Math.random() * 0.35,
+            speed: 0.0025 + Math.random() * 0.002,
+            size: 8 + Math.random() * 5,
+            phase: Math.random() * Math.PI * 2
+          };
+        }
+      );
+
+    } else {
+      floatingHearts = [];
+    }
+  }
+
+  // ANIMASI PARTIKEL HEART
+  function drawParticles() {
+    ctx.save();
+
+    const now = performance.now();
+    const isHeart = activeScene === "HEART";
+    const seconds = now / 1000;
+    const heartbeat = isHeart
+      ? 1 + Math.pow(Math.max(0, Math.sin(seconds * 2.4)), 8) * 0.035
+      : 1;
+
+    for (const p of particles) {
+      let targetX = p.tx;
+      let targetY = p.ty;
+
+      // Gerakan partikel
+      if (isHeart) {
+        targetX = W / 2 + (targetX - W / 2) * heartbeat;
+        targetY = H / 2 + (targetY - H / 2) * heartbeat;
+        targetX += Math.sin(
+          seconds * 1.25 + p.phase
+        ) * p.motion;
+
+        targetY += Math.cos(
+          seconds * 1.05 + p.phase
+        ) * p.motion;
+      }
+
+      // Interaksi dengan kursor atau sentuhan
+      if (isHeart && pointer.active) {
+        const dx = targetX - pointer.x;
+        const dy = targetY - pointer.y;
+        const distance = Math.hypot(dx, dy);
+
+        const radius = 105;
+
+        if (distance > 0 && distance < radius) {
+          const push = (1 - distance / radius) * 24;
+
+          targetX += (dx / distance) * push;
+          targetY += (dy / distance) * push;
+        }
+      }
+
+      p.x += (targetX - p.x) * (
+        isHeart ? 0.075 : 0.085
+      );
+
+      p.y += (targetY - p.y) * (
+        isHeart ? 0.075 : 0.085
+      );
+
+      if (isHeart) {
+        // Efek berkelap-kelip
+        const twinkle =
+          0.45 +
+          (Math.sin(seconds * 3.2 + p.phase) + 1) * 0.28;
+
+        ctx.globalAlpha = twinkle;
+        ctx.fillStyle = p.color;
+
+        ctx.shadowBlur = p.isOutline && outlineSprite ? 0 : 4 + twinkle * 4;
+        ctx.shadowColor = p.color;
+
+        if (p.isOutline && outlineSprite) {
+          const iconSize = Math.max(21, p.size * 14);
+          ctx.drawImage(
+            outlineSprite,
+            p.x - iconSize / 2,
+            p.y - iconSize / 2,
+            iconSize,
+            iconSize
+          );
+        } else if (
+          p.glyph === "✦" ||
+          p.glyph === "✧" ||
+          p.glyph === "♥" ||
+          p.glyph === "♡"
+        ) {
+          ctx.font = `${Math.max(4, p.size * 3.2)}px Arial`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+
+          ctx.fillText(p.glyph, p.x, p.y);
+
+        } else {
+          ctx.beginPath();
+
+          ctx.ellipse(
+            p.x,
+            p.y,
+            p.size * (1.1 + twinkle),
+            Math.max(0.45, p.size * 0.42),
+            Math.sin(p.phase) * 0.8,
+            0,
+            Math.PI * 2
+          );
+
+          ctx.fill();
+        }
+
+      } else {
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = p.color;
+        ctx.shadowBlur = 9;
+        ctx.shadowColor = p.color;
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Love kecil bergerak dari tengah menuju garis heart
+    if (isHeart) {
+      const messageSize = Math.min(W * 0.045, 25);
+      const messageY = H / 2 + Math.min(H * 0.025, 20);
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#ff79b7";
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = "#ff4f9a";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      for (const heart of floatingHearts) {
+        heart.progress += heart.speed;
+        if (heart.progress >= 1) heart.progress = 0;
+        const x = W / 2 + (heart.targetX - W / 2) * heart.progress;
+        const y = H / 2 + (heart.targetY - H / 2) * heart.progress;
+        const inTextArea =
+          Math.abs(x - W / 2) < messageSize * 4.3 + heart.size / 2 &&
+          Math.abs(y - messageY) < messageSize * 0.8 + heart.size / 2;
+        if (inTextArea) continue;
+        ctx.font = `${heart.size}px Arial`;
+        ctx.fillText(
+          "♥",
+          x + Math.sin(seconds * 1.8 + heart.phase) * 2,
+          y
+        );
+      }
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  // TULISAN DI TENGAH HEART
+  function drawHeartMessage() {
+    ctx.save();
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.font = `800 ${Math.min(W * 0.065, 44)}px "Segoe UI", Arial`;
+
+    ctx.fillStyle = "#fff0f8";
+    ctx.shadowColor = "#ff4f9a";
+    ctx.shadowBlur = 18;
+
+    ctx.fillText(
+      "I Love You NDUTT",
+      W / 2,
+      H / 2 + Math.min(H * 0.025, 20)
+    );
+
+    ctx.restore();
+  }
+
+  // PERGANTIAN SCENE
+  function setScene(next) {
+    if (next === activeScene) return;
+
+    activeScene = next;
+
+    if (["YOU", "ARE", "MY LOVE"].includes(next)) {
+      setParticles(makeTextPoints(next));
+
+    } else if (next === "HEART") {
+      heartSceneStartedAt = performance.now();
+      setParticles(makeHeart());
+
+    } else {
+      particles = [];
+    }
+  }
+
+  // ANIMASI UTAMA
+  function render() {
+    drawRain();
+
+    const elapsed =
+      (performance.now() - sceneStartedAt) / 1000;
+
+    let next = "";
+
+    if (elapsed >= 1.4 && elapsed < 4.2) {
+      next = "YOU";
+
+    } else if (elapsed >= 4.2 && elapsed < 7.0) {
+      next = "ARE";
+
+    } else if (elapsed >= 7.0 && elapsed < 9.8) {
+      next = "MY LOVE";
+
+    } else if (elapsed >= 9.8) {
+      next = "HEART";
+    }
+
+    setScene(next);
+
+    if (next) drawParticles();
+
+    if (
+      next === "HEART" &&
+      performance.now() - heartSceneStartedAt >= 2000
+    ) {
+      drawHeartMessage();
+    }
+
+    animationFrame = requestAnimationFrame(render);
+  }
+
+  function startMainAnimation() {
+    sceneStartedAt = performance.now();
+    activeScene = "";
+    particles = [];
+
+    ctx.fillStyle = "#09040c";
+    ctx.fillRect(0, 0, W, H);
+
+    cancelAnimationFrame(animationFrame);
+    render();
+  }
+
+  // INTRO DAN COUNTDOWN 3, 2, 1
+  setTimeout(() => {
+    let number = 3;
+
+    countdown.textContent = number;
+
+    const timer = setInterval(() => {
+      number--;
+
+      if (number > 0) {
+        countdown.textContent = number;
+
+      } else {
+        clearInterval(timer);
+
+        countdown.textContent = "💗";
+
+        setTimeout(() => {
+          intro.style.opacity = "0";
+
+          setTimeout(() => {
+            intro.style.display = "none";
+            startMainAnimation();
+          }, 1250);
+
+        }, 650);
+      }
+
+    }, 1000);
+
+  }, 1800);
+
+})();
+</script>
+
+</body>
+</html>
